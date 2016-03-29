@@ -166,39 +166,39 @@ class AgnosticClient(AgnosticClientBase):
         # 'MotorClient' that create_class_with_framework created.
         super(self.__class__, self).__init__(io_loop, *args, **kwargs)
 
-    def open(self, callback=None):
-        """Connect to the server.
-
-        Takes an optional callback, or returns a Future that resolves to
-        ``self`` when opened. This is convenient for checking at program
-        startup time whether you can connect.
-
-        ``open`` raises a :exc:`~pymongo.errors.ConnectionFailure` if it
-        cannot connect, but note that auth failures aren't revealed until
-        you attempt an operation on the open client.
-
-        :Parameters:
-         - `callback`: Optional function taking parameters (self, error)
-
-        .. versionchanged:: 0.2
-           :class:`MotorClient` now opens itself on demand, calling ``open``
-           explicitly is now optional.
-        """
-        return self._framework.future_or_callback(self._ensure_connected(True),
-                                                  callback,
-                                                  self.get_io_loop(),
-                                                  self)
-
-    def _get_member(self):
-        # TODO: expose the PyMongo Member, or otherwise avoid this.
-        return self.delegate._MongoClient__member
-
-    def _get_pools(self):
-        member = self._get_member()
-        return [member.pool] if member else [None]
-
-    def _get_primary_pool(self):
-        return self._get_pools()[0]
+    # def open(self, callback=None):
+    #     """Connect to the server.
+    #
+    #     Takes an optional callback, or returns a Future that resolves to
+    #     ``self`` when opened. This is convenient for checking at program
+    #     startup time whether you can connect.
+    #
+    #     ``open`` raises a :exc:`~pymongo.errors.ConnectionFailure` if it
+    #     cannot connect, but note that auth failures aren't revealed until
+    #     you attempt an operation on the open client.
+    #
+    #     :Parameters:
+    #      - `callback`: Optional function taking parameters (self, error)
+    #
+    #     .. versionchanged:: 0.2
+    #        :class:`MotorClient` now opens itself on demand, calling ``open``
+    #        explicitly is now optional.
+    #     """
+    #     return self._framework.future_or_callback(self._ensure_connected(True),
+    #                                               callback,
+    #                                               self.get_io_loop(),
+    #                                               self)
+    #
+    # def _get_member(self):
+    #     # TODO: expose the PyMongo Member, or otherwise avoid this.
+    #     return self.delegate._MongoClient__member
+    #
+    # def _get_pools(self):
+    #     member = self._get_member()
+    #     return [member.pool] if member else [None]
+    #
+    # def _get_primary_pool(self):
+    #     return self._get_pools()[0]
 
 
 class AgnosticDatabase(AgnosticBase):

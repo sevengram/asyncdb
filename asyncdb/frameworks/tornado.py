@@ -65,6 +65,30 @@ def get_future(loop):
 _DEFAULT = object()
 
 
+class MotorSocketOptions(object):
+    def __init__(
+            self,
+            resolver,
+            address,
+            family,
+            use_ssl,
+            certfile,
+            keyfile,
+            ca_certs,
+            cert_reqs,
+            socket_keepalive
+    ):
+        self.resolver = resolver
+        self.address = address
+        self.family = family
+        self.use_ssl = use_ssl
+        self.certfile = certfile
+        self.keyfile = keyfile
+        self.ca_certs = ca_certs
+        self.cert_reqs = cert_reqs
+        self.socket_keepalive = socket_keepalive
+
+
 def future_or_callback(future, callback, io_loop, return_value=_DEFAULT):
     """Compatible way to return a value in all Pythons.
 
@@ -287,6 +311,23 @@ class _Wait(concurrent.Future):
             self.set_exception(self._timeout_exception)
 
 
+class SockFile(object):
+    def __init__(self, sock):
+        self._sock = sock
+
+    def read(self, n):
+        read = self._sock.recv(n)
+        if len(read) == n:
+            return read
+        while True:
+            data = self._sock.recv(n - len(read))
+            if not data:
+                return read
+            read += data
+            if len(read) == n:
+                return read
+
+
 class TornadoMotorSocket(object):
     """A fake socket instance that pauses and resumes the current greenlet.
 
@@ -464,6 +505,10 @@ class TornadoMotorSocket(object):
 
     def fileno(self):
         return self.stream.socket.fileno()
+
+    def makefile(self, mode):
+        assert mode == 'rb'
+        return SockFile(self)
 
 
 # A create_socket() function is part of Motor's framework interface.

@@ -1,7 +1,9 @@
 import time
+
 import tornado.gen
 import tornado.ioloop
-from asyncdb import MotorClient
+
+from asyncdb.mysql import AmysqlConnection
 
 
 def my_function(callback):
@@ -13,10 +15,11 @@ def my_function(callback):
 @tornado.gen.engine
 def f():
     print('sta rt')
-    db = MotorClient().astro_data
-    result = yield tornado.gen.Task(db.deepsky.find_one, {'alias': 'M31'})
-    # result = yield tornado.gen.Task(my_function)
-    print('result is', result)
+    sql = "update site_info set status=status+1 where id=1"
+
+    connection = AmysqlConnection()
+    yield tornado.gen.Task(connection.connect)
+    yield tornado.gen.Task(connection.query, sql)
     tornado.ioloop.IOLoop.instance().stop()
 
 
