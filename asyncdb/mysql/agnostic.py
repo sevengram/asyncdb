@@ -1,8 +1,10 @@
+from __future__ import unicode_literals, absolute_import
+
 import pymysql.connections
 import pymysql.cursors
 
+from ..frameworks.pool import SocketPool
 from ..meta import *
-from ..mongo.pool import MotorPool
 
 
 class AgnosticBase(object):
@@ -21,12 +23,12 @@ class AgnosticBase(object):
 
 class DelegateConnection(pymysql.connections.Connection):
     def create_pool(self, io_loop, framework):
-        self.connection_pool = MotorPool(io_loop, framework, (self.host, self.port),
-                                         10,
-                                         self.connect_timeout,
-                                         self.connect_timeout,
-                                         self.ssl,
-                                         True)
+        self.connection_pool = SocketPool(io_loop, framework, (self.host, self.port),
+                                          10,
+                                          self.connect_timeout,
+                                          self.connect_timeout,
+                                          self.ssl,
+                                          True)
 
     def connect(self, sock=None):
         try:
@@ -63,7 +65,7 @@ class DelegateConnection(pymysql.connections.Connection):
 
 
 class AgnosticConnection(AgnosticBase):
-    __motor_class_name__ = 'AmysqlConnection'
+    __motor_class_name__ = 'AsyncClient'
     __delegate_class__ = DelegateConnection
 
     close = AsyncCommand()
@@ -73,7 +75,7 @@ class AgnosticConnection(AgnosticBase):
     begin = AsyncCommand()
     commit = AsyncCommand()
     rollback = AsyncCommand()
-    show_warnings = AsyncCommand()
+    show_warnings = AsyncRead()
     select_db = AsyncCommand()
     escape = DelegateMethod()
     literal = DelegateMethod()
@@ -95,21 +97,43 @@ class AgnosticConnection(AgnosticBase):
     get_server_info = DelegateMethod()
 
     def __init__(self, *args, **kwargs):
-        io_loop = self._framework.get_event_loop()
+        self.io_loop = self._framework.get_event_loop()
+        cursor_class = create_class_with_framework(AgnosticCursor, self._framework, self.__module__)
         delegate = self.__delegate_class__(host='localhost',
                                            user='root',
                                            password='root',
                                            defer_connect=True,
                                            db='wechat_platform',
                                            autocommit=True,
-                                           cursorclass=pymysql.cursors.DictCursor)
-        delegate.create_pool(io_loop, self._framework)
+                                           cursorclass=cursor_class)
+        delegate.create_pool(self.io_loop, self._framework)
         super(self.__class__, self).__init__(delegate)
-        if io_loop:
-            self._framework.check_event_loop(io_loop)
-            self.io_loop = io_loop
-        else:
-            self.io_loop = self._framework.get_event_loop()
+
+    def get_io_loop(self):
+        return self.io_loop
+
+
+class AgnosticCursor(AgnosticBase):
+    __motor_class_name__ = 'AsyncCursor'
+    __delegate_class__ = pymysql.cursors.DictCursor
+
+    close = AsyncCommand()
+    setinputsizes = DelegateMethod()
+    setoutputsizes = DelegateMethod()
+    nextset = AsyncRead()
+    mogrify = DelegateMethod()
+    execute = AsyncCommand()
+    executemany = AsyncCommand()
+    callproc = AsyncCommand()
+    fetchone = DelegateMethod()
+    fetchmany = DelegateMethod()
+    fetchall = DelegateMethod()
+    scroll = DelegateMethod()
+
+    def __init__(self, connection, *args, **kwargs):
+        self.io_loop = self._framework.get_event_loop()
+        delegate = self.__delegate_class__(connection)
+        super(self.__class__, self).__init__(delegate)
 
     def get_io_loop(self):
         return self.io_loop

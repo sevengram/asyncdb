@@ -20,6 +20,8 @@ import functools
 import greenlet
 import inspect
 
+import pymongo.cursor
+
 from . import pycompat
 from .errors import CallbackTypeError
 from .util import mangle_delegate_name
@@ -346,3 +348,21 @@ class ReadWriteProperty(AttributeFactory):
 class DelegateMethod(ReadOnlyProperty):
     """A method on the wrapped PyMongo object that does no I/O and can be called
     synchronously"""
+
+
+class CursorChainingMethod(AttributeFactory):
+    def create_attribute(self, cls, attr_name):
+        cursor_method = getattr(pymongo.cursor.Cursor, attr_name)
+
+        @functools.wraps(cursor_method)
+        def return_clone(self, *args, **kwargs):
+            cursor_method(self.delegate, *args, **kwargs)
+            return self
+
+        # This is for the benefit of motor_extensions.py
+        return_clone.is_motorcursor_chaining_method = True
+        return_clone.pymongo_method_name = attr_name
+        if self.doc:
+            return_clone.__doc__ = self.doc
+
+        return return_clone

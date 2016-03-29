@@ -25,4 +25,6 @@ def create_mysql_class(cls):
     return create_class_with_framework(cls, tornado_framework, 'asyncdb')
 
 
-AmysqlConnection = create_mysql_class(agnostic.AgnosticConnection)
+AsyncClient = create_mysql_class(agnostic.AgnosticConnection)
+
+AsyncCursor = create_mysql_class(agnostic.AgnosticCursor)

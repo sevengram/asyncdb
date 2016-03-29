@@ -12,11 +12,9 @@ def my_function(callback):
 
 @tornado.gen.engine
 def f():
-    print('sta rt')
     db = MotorClient().astro_data
     result = yield tornado.gen.Task(db.deepsky.find_one, {'alias': 'M31'})
-    # result = yield tornado.gen.Task(my_function)
-    print('result is', result)
+    print(result)
     tornado.ioloop.IOLoop.instance().stop()
 
 

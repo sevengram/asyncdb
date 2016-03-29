@@ -24,7 +24,7 @@ import time
 
 from pymongo.pool import _closed, SocketInfo
 
-from ..frameworks.tornado import MotorSocketOptions
+from .tornado import MotorSocketOptions
 from ..errors import ConnectionFailure
 
 HAS_SSL = True
@@ -35,7 +35,7 @@ except ImportError:
     HAS_SSL = False
 
 
-class MotorPool(object):
+class SocketPool(object):
     def __init__(
             self,
             io_loop,
