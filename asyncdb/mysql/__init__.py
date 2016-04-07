@@ -16,7 +16,7 @@
 
 from __future__ import unicode_literals, absolute_import
 
-from . import agnostic
+from . import core
 from ..frameworks import tornado as tornado_framework
 from ..meta import create_class_with_framework
 
@@ -25,6 +25,6 @@ def create_mysql_class(cls):
     return create_class_with_framework(cls, tornado_framework, 'asyncdb')
 
 
-AsyncClient = create_mysql_class(agnostic.AgnosticConnection)
+MysqlClient = create_mysql_class(core.AgnosticConnection)
 
-AsyncCursor = create_mysql_class(agnostic.AgnosticCursor)
+MysqlCursor = create_mysql_class(core.AgnosticCursor)

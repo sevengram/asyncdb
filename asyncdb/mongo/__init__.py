@@ -16,7 +16,7 @@
 
 from __future__ import unicode_literals, absolute_import
 
-from . import agnostic
+from . import core
 from ..frameworks import tornado as tornado_framework
 from ..meta import create_class_with_framework
 
@@ -25,12 +25,16 @@ def create_motor_class(cls):
     return create_class_with_framework(cls, tornado_framework, 'motor')
 
 
-MotorClient = create_motor_class(agnostic.AgnosticClient)
+MotorClient = create_motor_class(core.AgnosticClient)
 
-MotorDatabase = create_motor_class(agnostic.AgnosticDatabase)
+MotorDatabase = create_motor_class(core.AgnosticDatabase)
 
-MotorCollection = create_motor_class(agnostic.AgnosticCollection)
+MotorCollection = create_motor_class(core.AgnosticCollection)
 
-MotorCursor = create_motor_class(agnostic.AgnosticCursor)
+MotorCursor = create_motor_class(core.AgnosticCursor)
 
-MotorCommandCursor = create_motor_class(agnostic.AgnosticCommandCursor)
+MotorCommandCursor = create_motor_class(core.AgnosticCommandCursor)
+
+MotorAggregationCursor = create_motor_class(core.AgnosticAggregationCursor)
+
+MotorBulkOperationBuilder = create_motor_class(core.AgnosticBulkOperationBuilder)

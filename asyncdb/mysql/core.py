@@ -32,6 +32,7 @@ class DelegateConnection(pymysql.connections.Connection):
 
     def connect(self, sock=None):
         try:
+            # TODO: Should use socket pool
             self.socket = self.connection_pool.get_socket().sock
             self._rfile = self.socket.makefile('rb')
             self._next_seq_id = 0

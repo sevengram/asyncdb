@@ -33,8 +33,3 @@ class ConfigurationError(AsyncdbError):
 class CallbackTypeError(AsyncdbError):
     def __init__(self):
         AsyncdbError.__init__(self, "callback must be a callable")
-
-
-class InvalidOperation(AsyncdbError):
-    """Raised when a client attempts to perform an invalid operation.
-    """

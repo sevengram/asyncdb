@@ -17,9 +17,12 @@ from __future__ import unicode_literals, absolute_import
 import textwrap
 
 import pymongo
+import pymongo.bulk
 import pymongo.command_cursor
 import pymongo.cursor
 import pymongo.database
+import pymongo.errors
+import pymongo.mongo_replica_set_client
 import pymongo.son_manipulator
 
 from ..errors import *
@@ -101,10 +104,7 @@ class AgnosticClientBase(AgnosticBase):
         Useful in scripts where you want to choose which database to use
         based only on the URI in a configuration file.
         """
-        attr_name = mangle_delegate_name(
-            self.__class__,
-            '__default_database_name')
-
+        attr_name = mangle_delegate_name(self.__class__, '__default_database_name')
         default_db_name = getattr(self.delegate, attr_name)
         if default_db_name is None:
             raise ConfigurationError('No default database defined')
@@ -183,6 +183,175 @@ class AgnosticClient(AgnosticClientBase):
         return self._get_pools()[0]
 
 
+class AgnosticReplicaSetClient(AgnosticClientBase):
+    __motor_class_name__ = 'MotorReplicaSetClient'
+    __delegate_class__ = pymongo.mongo_replica_set_client.MongoReplicaSetClient
+
+    primary = ReadOnlyProperty()
+    secondaries = ReadOnlyProperty()
+    arbiters = ReadOnlyProperty()
+    hosts = ReadOnlyProperty()
+    seeds = DelegateMethod()
+    close = DelegateMethod()
+
+    _simple_command = AsyncRead(attr_name='__simple_command')
+    _socket = AsyncRead(attr_name='__socket')
+
+    def __init__(self, *args, **kwargs):
+        """Create a new connection to a MongoDB replica set.
+
+        MotorReplicaSetClient takes the same constructor arguments as
+        :class:`~pymongo.mongo_replica_set_client.MongoReplicaSetClient`,
+        as well as:
+
+        :Parameters:
+          - `io_loop` (optional): Special :class:`tornado.ioloop.IOLoop`
+            instance to use instead of default
+        """
+        if 'io_loop' in kwargs:
+            io_loop = kwargs.pop('io_loop')
+        else:
+            io_loop = self._framework.get_event_loop()
+
+        kwargs['_monitor_class'] = functools.partial(
+            MotorReplicaSetMonitor, io_loop, self._framework)
+
+        # Our class is not actually AgnosticClient here, it's the version of
+        # 'MotorClient' that create_class_with_framework created.
+        super(self.__class__, self).__init__(io_loop, *args, **kwargs)
+
+    def open(self, callback=None):
+        """Connect to the server.
+
+        Takes an optional callback, or returns a Future that resolves to
+        ``self`` when opened. This is convenient for checking at program
+        startup time whether you can connect.
+
+        ``open`` raises a :exc:`~pymongo.errors.ConnectionFailure` if it
+        cannot connect, but note that auth failures aren't revealed until
+        you attempt an operation on the open client.
+
+        :Parameters:
+         - `callback`: Optional function taking parameters (self, error)
+
+        .. versionchanged:: 0.2
+           :class:`MotorReplicaSetClient` now opens itself on demand, calling
+           ``open`` explicitly is now optional.
+        """
+        loop = self.get_io_loop()
+        future = self._framework.get_future(loop)
+        retval = self._framework.future_or_callback(future, callback, loop)
+        connected_callback = functools.partial(self._connected_callback, future)
+        self._ensure_connected(sync=True, callback=connected_callback)
+        return retval
+
+    def _connected_callback(self, future, result, error):
+        if error:
+            # TODO: exc_info.
+            future.set_exception(error)
+        elif not self._get_member():
+            future.set_exception(pymongo.errors.AutoReconnect('no primary is available'))
+        else:
+            future.set_result(self)
+
+    def _get_member(self):
+        # TODO: expose the PyMongo RSC members, or otherwise avoid this.
+        # This raises if the RSState's error is set.
+        rs_state = self.delegate._MongoReplicaSetClient__get_rs_state()
+        return rs_state.primary_member
+
+    def _get_pools(self):
+        rs_state = self._get_member()
+        return [member.pool for member in rs_state._members]
+
+    def _get_primary_pool(self):
+        primary_member = self._get_member()
+        return primary_member.pool if primary_member else None
+
+
+# PyMongo uses a background thread to regularly inspect the replica set and
+# monitor it for changes. In Motor, use a periodic callback on the IOLoop to
+# monitor the set.
+class MotorReplicaSetMonitor(pymongo.mongo_replica_set_client.Monitor):
+    def __init__(self, loop, framework, rsc):
+        msg = (
+            "First argument to MotorReplicaSetMonitor must be"
+            " MongoReplicaSetClient, not %r" % rsc)
+
+        assert isinstance(
+            rsc, pymongo.mongo_replica_set_client.MongoReplicaSetClient), msg
+
+        # Super makes two MotorGreenletEvents: self.event and self.refreshed.
+        # We only use self.refreshed.
+        event_class = functools.partial(MotorGreenletEvent, loop, framework)
+
+        pymongo.mongo_replica_set_client.Monitor.__init__(self, rsc, event_class=event_class)
+        self.timeout_handle = None
+        self.started = False
+        self.loop = loop
+        self._framework = framework
+
+    def shutdown(self, _=None):
+        self.stopped = True
+        if self.timeout_handle:
+            self._framework.call_later_cancel(self.loop, self.timeout_handle)
+            self.timeout_handle = None
+
+    def refresh(self):
+        assert greenlet.getcurrent().parent is not None, "Should be on child greenlet"
+
+        try:
+            self.rsc.refresh()
+        except (pymongo.errors.AutoReconnect, IOError, OSError):
+            # Stream closed.
+            pass
+        except ReferenceError:
+            # rsc was collected.
+            return
+        except Exception:
+            pass
+        finally:
+            # Switch to greenlets blocked in wait_for_refresh().
+            self.refreshed.set()
+
+        self.timeout_handle = self._framework.call_later(
+            self.loop, self._refresh_interval, self.async_refresh)
+
+    def async_refresh(self):
+        greenlet.greenlet(self.refresh).switch()
+
+    def start(self):
+        self.started = True
+        self.timeout_handle = self._framework.call_later(
+            self.loop, self._refresh_interval, self.async_refresh)
+
+    start_sync = start
+
+    def schedule_refresh(self):
+        self.refreshed.clear()
+        if self.timeout_handle:
+            self._framework.call_later_cancel(self.loop, self.timeout_handle)
+            self.timeout_handle = None
+
+        self._framework.call_soon(self.loop, self.async_refresh)
+
+    def join(self, timeout=None):
+        # PyMongo calls join() after shutdown() -- this is not a thread, so
+        # shutdown works immediately and join is unnecessary
+        pass
+
+    def wait_for_refresh(self, timeout_seconds):
+        assert greenlet.getcurrent().parent is not None, "Should be on child greenlet"
+
+        # self.refreshed is a util.MotorGreenletEvent.
+        self.refreshed.wait(timeout_seconds)
+
+    def is_alive(self):
+        return self.started and not self.stopped
+
+    isAlive = is_alive
+
+
 class AgnosticDatabase(AgnosticBase):
     __motor_class_name__ = 'MotorDatabase'
     __delegate_class__ = pymongo.database.Database
@@ -202,10 +371,10 @@ class AgnosticDatabase(AgnosticBase):
     current_op = AsyncRead()
     profiling_level = AsyncRead()
     profiling_info = AsyncRead()
-    error = AsyncRead(doc="OBSOLETE")
-    last_status = AsyncRead(doc="OBSOLETE")
-    previous_error = AsyncRead(doc="OBSOLETE")
-    reset_error_history = AsyncCommand(doc="OBSOLETE")
+    error = AsyncRead()
+    last_status = AsyncRead()
+    previous_error = AsyncRead()
+    reset_error_history = AsyncCommand()
     dereference = AsyncRead()
 
     incoming_manipulators = ReadOnlyProperty()
@@ -341,13 +510,77 @@ class AgnosticCollection(AgnosticBase):
         :meth:`~MotorCursor.count` perform actual operations.
         """
         if 'callback' in kwargs:
-            raise InvalidOperation("Pass a callback to each, to_list, or count, not to find.")
+            raise pymongo.errors.InvalidOperation("Pass a callback to each, to_list, or count, not to find.")
 
         cursor = self.delegate.find(*args, **kwargs)
         cursor_class = create_class_with_framework(
             AgnosticCursor, self._framework, self.__module__)
 
         return cursor_class(cursor, self)
+
+    def aggregate(self, pipeline, **kwargs):
+        """Execute an aggregation pipeline on this collection.
+
+        The aggregation can be run on a secondary if the client is a
+        :class:`~motor.MotorReplicaSetClient` and its ``read_preference`` is not
+        :attr:`PRIMARY`.
+
+        :Parameters:
+          - `pipeline`: a single command or list of aggregation commands
+          - `**kwargs`: send arbitrary parameters to the aggregate command
+
+        Returns a `MotorCommandCursor` that can be iterated like a cursor from
+        `find`::
+
+          pipeline = [{'$project': {'name': {'$toUpper': '$name'}}}]
+          cursor = collection.aggregate(pipeline)
+          while (yield cursor.fetch_next):
+              doc = cursor.next_object()
+              print(doc)
+
+        In Python 3.5 and newer, aggregation cursors can be iterated elegantly
+        in native coroutines with `async for`::
+
+          async def f():
+              async for doc in collection.aggregate(pipeline):
+                  doc = cursor.next_object()
+                  print(doc)
+
+        MongoDB versions 2.4 and older do not support aggregation cursors; use
+        ``yield`` and pass ``cursor=False`` for compatibility with older
+        MongoDBs::
+
+          reply = yield collection.aggregate(cursor=False)
+          for doc in reply['results']:
+              print(doc)
+
+        .. versionchanged:: 0.5
+           `aggregate` now returns a cursor by default, and the cursor is
+           returned immediately without a ``yield``.
+           See :ref:`aggregation changes in Motor 0.5 <aggregate_changes_0_5>`.
+
+        .. versionchanged:: 0.2
+           Added cursor support.
+
+        .. _aggregate command:
+            http://docs.mongodb.org/manual/applications/aggregation
+
+        """
+        if kwargs.get('cursor') is False:
+            kwargs.pop('cursor')
+            # One-shot aggregation, no cursor. Send command now, return Future.
+            return self._async_aggregate(pipeline, **kwargs)
+        else:
+            if 'callback' in kwargs:
+                raise pymongo.errors.InvalidOperation(
+                    "Pass a callback to to_list or each, not to aggregate.")
+
+            kwargs.setdefault('cursor', {})
+            cursor_class = create_class_with_framework(
+                AgnosticAggregationCursor, self._framework, self.__module__)
+
+            # Latent cursor that will send initial command on first "async for".
+            return cursor_class(self, pipeline, **kwargs)
 
     def parallel_scan(self, num_cursors, **kwargs):
         """Scan this entire collection in parallel.
@@ -411,6 +644,43 @@ class AgnosticCollection(AgnosticBase):
 
             future.set_result(motor_command_cursors)
 
+    def initialize_unordered_bulk_op(self):
+        """Initialize an unordered batch of write operations.
+
+        Operations will be performed on the server in arbitrary order,
+        possibly in parallel. All operations will be attempted.
+
+        Returns a :class:`~motor.MotorBulkOperationBuilder` instance.
+
+        See :ref:`unordered_bulk` for examples.
+
+        .. versionadded:: 0.2
+        """
+        bob_class = create_class_with_framework(
+            AgnosticBulkOperationBuilder, self._framework, self.__module__)
+
+        return bob_class(self, ordered=False)
+
+    def initialize_ordered_bulk_op(self):
+        """Initialize an ordered batch of write operations.
+
+        Operations will be performed on the server serially, in the
+        order provided. If an error occurs all remaining operations
+        are aborted.
+
+        Returns a :class:`~motor.MotorBulkOperationBuilder` instance.
+
+        See :ref:`ordered_bulk` for examples.
+
+        .. versionadded:: 0.2
+        """
+        bob_class = create_class_with_framework(
+            AgnosticBulkOperationBuilder,
+            self._framework,
+            self.__module__)
+
+        return bob_class(self, ordered=True)
+
     def wrap(self, obj):
         if obj.__class__ is pymongo.database.Collection:
             return self.database[obj.name]
@@ -469,7 +739,8 @@ class AgnosticBaseCursor(AgnosticBase):
     def _get_more(self):
         """Initial query or getMore. Returns a Future."""
         if not self.alive:
-            raise InvalidOperation("Can't call get_more() on a MotorCursor that has been exhausted or killed.")
+            raise pymongo.errors.InvalidOperation(
+                "Can't call get_more() on a MotorCursor that has been exhausted or killed.")
 
         self.started = True
         return self._refresh()
@@ -584,14 +855,12 @@ class AgnosticBaseCursor(AgnosticBase):
                 raise ValueError('length must be non-negative')
 
         if self._query_flags() & pymongo.cursor._QUERY_OPTIONS['tailable_cursor']:
-            raise InvalidOperation("Can't call to_list on tailable cursor")
+            raise pymongo.errors.InvalidOperation("Can't call to_list on tailable cursor")
 
         to_list_future = self._framework.get_future(self.get_io_loop())
 
         # Run future_or_callback's type checking before we change anything.
-        retval = self._framework.future_or_callback(to_list_future,
-                                                    callback,
-                                                    self.get_io_loop())
+        retval = self._framework.future_or_callback(to_list_future, callback, self.get_io_loop())
 
         if not self.alive:
             to_list_future.set_result([])
@@ -773,3 +1042,75 @@ class AgnosticCommandCursor(AgnosticBaseCursor):
     @motor_coroutine
     def _close(self):
         yield self._framework.yieldable(self._CommandCursor__die())
+
+
+class _LatentCursor(object):
+    """Take the place of a PyMongo CommandCursor until aggregate() begins."""
+    alive = True
+    _CommandCursor__data = []
+    _CommandCursor__id = None
+    _CommandCursor__killed = False
+    cursor_id = None
+
+    def clone(self):
+        return _LatentCursor()
+
+    def rewind(self):
+        pass
+
+
+class AgnosticAggregationCursor(AgnosticCommandCursor):
+    __motor_class_name__ = 'MotorAggregationCursor'
+
+    def __init__(self, collection, pipeline, **kwargs):
+        # We're being constructed without yield or await, like:
+        #
+        #     cursor = collection.aggregate(pipeline)
+        #
+        # ... so we can't send the "aggregate" command to the server and get
+        # a PyMongo CommandCursor back yet. Set self.delegate to a latent
+        # cursor until the first yield or await triggers _get_more().
+        super(self.__class__, self).__init__(_LatentCursor(), collection)
+        self.pipeline = pipeline
+        self.kwargs = kwargs
+
+    def _get_more(self):
+        if not self.started:
+            self.started = True
+            future = self._framework.get_future(self.get_io_loop())
+            self.collection._async_aggregate(
+                self.pipeline,
+                callback=functools.partial(self._on_get_more, future),
+                **self.kwargs)
+
+            return future
+
+        return super(self.__class__, self)._get_more()
+
+    def _on_get_more(self, future, result, error):
+        if result:
+            # "result" is a CommandCursor from PyMongo's aggregate().
+            self.delegate = result
+
+            # _get_more is complete.
+            future.set_result(len(result._CommandCursor__data))
+        else:
+            # TODO: exc_info.
+            future.set_exception(error)
+
+
+class AgnosticBulkOperationBuilder(AgnosticBase):
+    __motor_class_name__ = 'MotorBulkOperationBuilder'
+    __delegate_class__ = pymongo.bulk.BulkOperationBuilder
+
+    find = DelegateMethod()
+    insert = DelegateMethod()
+    execute = AsyncCommand()
+
+    def __init__(self, collection, ordered):
+        self.io_loop = collection.get_io_loop()
+        delegate = pymongo.bulk.BulkOperationBuilder(collection.delegate, ordered)
+        super(self.__class__, self).__init__(delegate)
+
+    def get_io_loop(self):
+        return self.io_loop

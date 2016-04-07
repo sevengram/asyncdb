@@ -20,7 +20,7 @@ import pymongo
 
 from .pycompat import text_type
 
-version_tuple = (0, 5)
+version_tuple = (0, 1)
 
 
 def get_version_string():
@@ -33,11 +33,10 @@ version = get_version_string()
 
 expected_pymongo_version = '2.8'
 if pymongo.version != expected_pymongo_version:
-    msg = (
-              "Motor %s requires PyMongo at exactly version %s. "
-              "You have PyMongo %s. "
-              "Do pip install pymongo==2.8.0"
-          ) % (version, expected_pymongo_version, pymongo.version)
+    msg = ("Motor %s requires PyMongo at exactly version %s. "
+           "You have PyMongo %s. "
+           "Do pip install pymongo==2.8.0"
+           ) % (version, expected_pymongo_version, pymongo.version)
 
     raise ImportError(msg)
 
@@ -46,4 +45,13 @@ try:
 except ImportError:
     tornado = None
 else:
-    from .mongo import MotorClient, MotorDatabase, MotorCollection, MotorCursor, MotorCommandCursor
+    from .mongo import (MotorClient,
+                        MotorDatabase,
+                        MotorCollection,
+                        MotorCursor,
+                        MotorCommandCursor,
+                        MotorAggregationCursor,
+                        MotorBulkOperationBuilder)
+
+    from .mysql import (MysqlClient,
+                        MysqlCursor)
