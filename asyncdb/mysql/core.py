@@ -3,7 +3,7 @@ from __future__ import unicode_literals, absolute_import
 import pymysql.connections
 import pymysql.cursors
 
-from ..frameworks.pool import SocketPool
+from .. import errors
 from ..meta import *
 
 
@@ -21,19 +21,14 @@ class AgnosticBase(object):
         return '%s(%r)' % (self.__class__.__name__, self.delegate)
 
 
-class DelegateConnection(pymysql.connections.Connection):
-    def create_pool(self, io_loop, framework):
-        self.connection_pool = SocketPool(io_loop, framework, (self.host, self.port),
-                                          10,
-                                          self.connect_timeout,
-                                          self.connect_timeout,
-                                          self.ssl,
-                                          True)
+class PoolConnection(pymysql.connections.Connection):
+    def set_conn_pool(self, conn_pool):
+        self.conn_pool = conn_pool
 
     def connect(self, sock=None):
         try:
-            # TODO: Should use socket pool
-            self.socket = self.connection_pool.get_socket().sock
+            self.sock_info = self.conn_pool.get_sock_info()
+            self.socket = self.sock_info.sock
             self._rfile = self.socket.makefile('rb')
             self._next_seq_id = 0
 
@@ -54,22 +49,35 @@ class DelegateConnection(pymysql.connections.Connection):
                 self.autocommit(self.autocommit_mode)
         except BaseException as e:
             self._rfile = None
-            if sock is not None:
+            if self.socket is not None:
                 try:
-                    sock.close()
+                    self.socket.close()
                 except:
                     pass
+
+            if isinstance(e, (OSError, IOError, errors.SocketError)):
+                exc = errors.OperationalError(
+                    2003,
+                    "Can't connect to MySQL server on %r (%s)" % (self.host, e))
+                raise exc
+
             # If e is neither DatabaseError or IOError, It's a bug.
             # But raising AssertionError hides original error.
             # So just reraise it.
             raise
 
+    def close(self):
+        """Send the quit message and close the socket"""
+        self.conn_pool.return_sock_info(self.sock_info)
+        self.socket = None
+        self._rfile = None
+
 
 class AgnosticConnection(AgnosticBase):
-    __motor_class_name__ = 'AsyncClient'
-    __delegate_class__ = DelegateConnection
+    __motor_class_name__ = 'MysqlClient'
+    __delegate_class__ = PoolConnection
 
-    close = AsyncCommand()
+    close = DelegateMethod()
     open = ReadOnlyProperty()
     autocommit = AsyncCommand()
     get_autocommit = DelegateMethod()
@@ -97,17 +105,20 @@ class AgnosticConnection(AgnosticBase):
     get_proto_info = DelegateMethod()
     get_server_info = DelegateMethod()
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, pool, *args, **kwargs):
         self.io_loop = self._framework.get_event_loop()
         cursor_class = create_class_with_framework(AgnosticCursor, self._framework, self.__module__)
-        delegate = self.__delegate_class__(host='localhost',
-                                           user='root',
-                                           password='root',
+        delegate = self.__delegate_class__(host=pool.host,
+                                           user=pool.user,
+                                           password=pool.password,
+                                           database=pool.database,
+                                           port=pool.port,
                                            defer_connect=True,
-                                           db='wechat_platform',
                                            autocommit=True,
-                                           cursorclass=cursor_class)
-        delegate.create_pool(self.io_loop, self._framework)
+                                           cursorclass=cursor_class,
+                                           *args,
+                                           **kwargs)
+        delegate.set_conn_pool(pool)
         super(self.__class__, self).__init__(delegate)
 
     def get_io_loop(self):
@@ -115,7 +126,7 @@ class AgnosticConnection(AgnosticBase):
 
 
 class AgnosticCursor(AgnosticBase):
-    __motor_class_name__ = 'AsyncCursor'
+    __motor_class_name__ = 'MysqlCursor'
     __delegate_class__ = pymysql.cursors.DictCursor
 
     close = AsyncCommand()

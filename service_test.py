@@ -9,7 +9,7 @@ import tornado.web
 from tornado.options import define, options
 
 from asyncdb import MotorClient
-from asyncdb import MysqlClient
+from asyncdb.mysql import TorMysqlPool
 
 define('port', default=33600, help="run on the given port", type=int)
 define('env', default='dev', help="run on the given environment", type=str)
@@ -18,9 +18,8 @@ define('conf', default='config', help="config file dir", type=str)
 tornado.options.parse_command_line()
 
 motor_db = MotorClient().astro_data
-
-mysql_client = MysqlClient()
-mysql_client.connect()
+mysql_pool = TorMysqlPool(host='127.0.0.1', port=3306, user='root', password='root',
+                          database='wechat_platform')
 
 
 class MotorHandler(tornado.web.RequestHandler):
@@ -35,12 +34,15 @@ class MotorHandler(tornado.web.RequestHandler):
 class MysqlHandler(tornado.web.RequestHandler):
     @tornado.gen.coroutine
     def get(self):
+        mysql_client = mysql_pool.get_connection()
+        yield mysql_client.connect()
         cursor = mysql_client.cursor()
         yield cursor.execute("select * from site_info where id=1")
         result = cursor.fetchone()
         del result['ctime']
         self.write(result)
         self.finish()
+        mysql_client.close()
 
 
 if __name__ == '__main__':

@@ -13,6 +13,7 @@
 # limitations under the License.
 
 """Exceptions raised by Asyncdb."""
+import socket
 
 
 class AsyncdbError(Exception):
@@ -30,6 +31,17 @@ class ConfigurationError(AsyncdbError):
     """
 
 
+class OperationalError(AsyncdbError):
+    """Exception raised for errors that are related to the database's
+    operation and not necessarily under the control of the programmer,
+    e.g. an unexpected disconnect occurs, the data source name is not
+    found, a transaction could not be processed, a memory allocation
+    error occurred during processing, etc."""
+
+
 class CallbackTypeError(AsyncdbError):
     def __init__(self):
         AsyncdbError.__init__(self, "callback must be a callable")
+
+
+SocketError = socket.error
