@@ -31,22 +31,24 @@ class PoolConnection(pymysql.connections.Connection):
             self.socket = self.sock_info.sock
             self._rfile = self.socket.makefile('rb')
             self._next_seq_id = 0
+            if not self.sock_info.connected:
+                self._get_server_information()
+                self._request_authentication()
 
-            self._get_server_information()
-            self._request_authentication()
+                if self.sql_mode is not None:
+                    c = self.cursor()
+                    c.execute("SET sql_mode=%s", (self.sql_mode,))
 
-            if self.sql_mode is not None:
-                c = self.cursor()
-                c.execute("SET sql_mode=%s", (self.sql_mode,))
+                if self.init_command is not None:
+                    c = self.cursor()
+                    c.execute(self.init_command)
+                    c.close()
+                    self.commit()
 
-            if self.init_command is not None:
-                c = self.cursor()
-                c.execute(self.init_command)
-                c.close()
-                self.commit()
+                if self.autocommit_mode is not None:
+                    self.autocommit(self.autocommit_mode)
 
-            if self.autocommit_mode is not None:
-                self.autocommit(self.autocommit_mode)
+                self.sock_info.connected = True
         except BaseException as e:
             self._rfile = None
             if self.socket is not None:

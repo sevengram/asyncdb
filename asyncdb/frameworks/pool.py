@@ -21,8 +21,7 @@ import functools
 import greenlet
 import socket
 import time
-
-from pymongo.pool import _closed, SocketInfo
+from select import select
 
 from .tornado import MotorSocketOptions
 from ..errors import ConnectionFailure
@@ -33,6 +32,79 @@ try:
 except ImportError:
     ssl = None
     HAS_SSL = False
+
+
+class SocketInfo(object):
+    """
+    Store a socket with some metadata
+    """
+
+    def __init__(self, sock, pool_id, host=None):
+        self.sock = sock
+        self.host = host
+        self.authset = set()
+        self.closed = False
+        self.last_checkout = time.time()
+        self.forced = False
+        self.connected = False
+
+        self._min_wire_version = None
+        self._max_wire_version = None
+
+        # The pool's pool_id changes with each reset() so we can close sockets
+        # created before the last reset.
+        self.pool_id = pool_id
+
+    def close(self):
+        self.closed = True
+        # Avoid exceptions on interpreter shutdown.
+        try:
+            self.sock.close()
+        except:
+            pass
+
+    def set_wire_version_range(self, min_wire_version, max_wire_version):
+        self._min_wire_version = min_wire_version
+        self._max_wire_version = max_wire_version
+
+    @property
+    def min_wire_version(self):
+        assert self._min_wire_version is not None
+        return self._min_wire_version
+
+    @property
+    def max_wire_version(self):
+        assert self._max_wire_version is not None
+        return self._max_wire_version
+
+    def __eq__(self, other):
+        # Need to check if other is NO_REQUEST or NO_SOCKET_YET, and then check
+        # if its sock is the same as ours
+        return hasattr(other, 'sock') and self.sock == other.sock
+
+    def __ne__(self, other):
+        return not self == other
+
+    def __hash__(self):
+        return hash(self.sock)
+
+    def __repr__(self):
+        return "SocketInfo(%s)%s at %s" % (
+            repr(self.sock),
+            self.closed and " CLOSED" or "",
+            id(self)
+        )
+
+
+def _closed(sock):
+    """Return True if we know socket has been closed, False otherwise.
+    """
+    try:
+        rd, _, _ = select([sock], [], [], 0)
+    # Any exception here is equally bad (select.error, ValueError, etc.).
+    except:
+        return True
+    return len(rd) > 0
 
 
 class SocketPool(object):
@@ -291,13 +363,10 @@ class SocketPool(object):
             if waiter in self.waiter_timeouts:
                 timeout = self.waiter_timeouts.pop(waiter)
                 self._framework.call_later_cancel(self.io_loop, timeout)
-
             self._framework.call_soon(self.io_loop,
                                       functools.partial(waiter, sock_info))
-
         elif self.motor_sock_counter <= self.max_size and sock_info.pool_id == self.pool_id:
             self.sockets.add(sock_info)
-
         else:
             sock_info.close()
             # if not sock_info.forced:
