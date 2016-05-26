@@ -22,6 +22,7 @@ import greenlet
 import socket
 import sys
 
+import io
 import tornado
 from tornado import concurrent, gen, ioloop, iostream, netutil
 
@@ -63,30 +64,6 @@ def get_future(loop):
 
 
 _DEFAULT = object()
-
-
-class MotorSocketOptions(object):
-    def __init__(
-            self,
-            resolver,
-            address,
-            family,
-            use_ssl,
-            certfile,
-            keyfile,
-            ca_certs,
-            cert_reqs,
-            socket_keepalive
-    ):
-        self.resolver = resolver
-        self.address = address
-        self.family = family
-        self.use_ssl = use_ssl
-        self.certfile = certfile
-        self.keyfile = keyfile
-        self.ca_certs = ca_certs
-        self.cert_reqs = cert_reqs
-        self.socket_keepalive = socket_keepalive
 
 
 def future_or_callback(future, callback, io_loop, return_value=_DEFAULT):
@@ -328,7 +305,7 @@ class SockFile(object):
                 return read
 
 
-class TornadoMotorSocket(object):
+class TornadoAsyncSocket(object):
     """A fake socket instance that pauses and resumes the current greenlet.
 
     Pauses the calling greenlet when making blocking calls, and uses the
@@ -507,9 +484,10 @@ class TornadoMotorSocket(object):
         return self.stream.socket.fileno()
 
     def makefile(self, mode):
-        assert mode == 'rb'
+        # return io.BufferedReader(socket.SocketIO(self, mode))
+        # assert mode == 'rb'
         return SockFile(self)
 
 
 # A create_socket() function is part of Motor's framework interface.
-create_socket = TornadoMotorSocket
+create_socket = TornadoAsyncSocket

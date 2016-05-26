@@ -52,25 +52,17 @@ class PoolConnection(pymysql.connections.Connection):
         except BaseException as e:
             self._rfile = None
             if self.socket is not None:
-                try:
-                    self.socket.close()
-                except:
-                    pass
-
+                self.socket.close()
             if isinstance(e, (OSError, IOError, errors.SocketError)):
                 exc = errors.OperationalError(
-                    2003,
-                    "Can't connect to MySQL server on %r (%s)" % (self.host, e))
+                    2003, "Can't connect to MySQL server on %r (%s)" % (self.host, e))
                 raise exc
-
-            # If e is neither DatabaseError or IOError, It's a bug.
-            # But raising AssertionError hides original error.
-            # So just reraise it.
             raise
 
     def close(self):
         """Send the quit message and close the socket"""
         self.conn_pool.return_sock_info(self.sock_info)
+        self.sock_info = None
         self.socket = None
         self._rfile = None
 

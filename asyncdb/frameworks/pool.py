@@ -23,7 +23,6 @@ import socket
 import time
 from select import select
 
-from .tornado import MotorSocketOptions
 from ..errors import ConnectionFailure
 
 HAS_SSL = True
@@ -105,6 +104,30 @@ def _closed(sock):
     except:
         return True
     return len(rd) > 0
+
+
+class SocketOptions(object):
+    def __init__(
+            self,
+            resolver,
+            address,
+            family,
+            use_ssl,
+            certfile,
+            keyfile,
+            ca_certs,
+            cert_reqs,
+            socket_keepalive
+    ):
+        self.resolver = resolver
+        self.address = address
+        self.family = family
+        self.use_ssl = use_ssl
+        self.certfile = certfile
+        self.keyfile = keyfile
+        self.ca_certs = ca_certs
+        self.cert_reqs = cert_reqs
+        self.socket_keepalive = socket_keepalive
 
 
 class SocketPool(object):
@@ -203,7 +226,7 @@ class SocketPool(object):
         if HAS_SSL and use_ssl and not ssl_cert_reqs:
             ssl_cert_reqs = ssl.CERT_NONE
 
-        self._motor_socket_options = MotorSocketOptions(
+        self._motor_socket_options = SocketOptions(
             resolver=self._framework.get_resolver(self.io_loop),
             address=pair,
             family=family,
@@ -243,29 +266,29 @@ class SocketPool(object):
         """
         Connect and return a socket object.
         """
-        motor_sock = None
+        async_sock = None
         try:
             self.motor_sock_counter += 1
-            motor_sock = self._framework.create_socket(
+            async_sock = self._framework.create_socket(
                 self.io_loop,
                 self._motor_socket_options)
 
             if not self.is_unix_socket:
-                motor_sock.settimeout(self.conn_timeout or 20.0)
+                async_sock.settimeout(self.conn_timeout or 20.0)
 
             # MotorSocket pauses this greenlet, and resumes when connected.
-            motor_sock.connect()
-            motor_sock.settimeout(self.net_timeout)
-            return motor_sock
+            async_sock.connect()
+            async_sock.settimeout(self.net_timeout)
+            return async_sock
         except:
             self.motor_sock_counter -= 1
-            if motor_sock is not None:
-                motor_sock.close()
+            if async_sock is not None:
+                async_sock.close()
             raise
 
     def connect(self, force=False):
         """
-        Connect to Mongo and return a new connected MotorSocket. Note that
+        Connect to database and return a new connected MotorSocket. Note that
         the pool does not keep a reference to the socket -- you must call
         maybe_return_socket() when you're done with it.
         """
